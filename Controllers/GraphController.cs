@@ -17,6 +17,12 @@ namespace GraphService.Controllers
             return await _repository.GetGraphsAsync();
         }
 
+        [HttpGet("getPaged", Name = "getAllGraphsPaged")]
+        public async Task<IEnumerable<Graph>> GetAllGraphs(int pageNumber, int pageSize)
+        {
+            return await _repository.GetGraphsPagedAsync(pageNumber, pageSize);
+        }
+
         [HttpPost("create", Name = "createGraph")]
         public async Task<ActionResult<Graph>> CreateGraph([FromBody] Graph graph)
         {

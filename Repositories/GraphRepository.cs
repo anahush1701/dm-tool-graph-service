@@ -24,12 +24,27 @@ namespace GraphService.Repositories
         public async Task<Graph> GetGraphAsync(int id)
         {
             return await _context.Graphs
+                .Include(g => g.Nodes)
+                .Include(g => g.Links)
                 .FirstOrDefaultAsync(g => g.Id == id);
         }
 
         public async Task<IEnumerable<Graph>> GetGraphsAsync()
         {
-            return await _context.Graphs.ToListAsync();
+            return await _context.Graphs
+                .Include(g => g.Nodes)
+                .Include(g => g.Links)
+                .ToListAsync();
+        }
+
+        public async Task<IEnumerable<Graph>> GetGraphsPagedAsync(int pageNumber, int pageSize)
+        {
+            return await _context.Graphs
+                .Include(g => g.Nodes)
+                .Include(g => g.Links)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
         }
 
         public async Task SaveChangesAsync()
@@ -39,7 +54,7 @@ namespace GraphService.Repositories
 
         public async Task UpdateGraphAsync(Graph updatedGraph)
         {
-            // 1. Load the existing graph with its nodes and links
+            // 1. Fetch the existing graph with all related data
             var existingGraph = await _context.Graphs
                 .Include(g => g.Nodes)
                 .Include(g => g.Links)
@@ -48,44 +63,37 @@ namespace GraphService.Repositories
             if (existingGraph == null)
                 throw new KeyNotFoundException($"Graph with Id {updatedGraph.Id} not found.");
 
-            // 2. Update scalar properties
+            // 2. Update scalar properties of the root entity
             _context.Entry(existingGraph).CurrentValues.SetValues(updatedGraph);
 
-            // 3. Update Nodes
-            UpdateCollection(existingGraph.Nodes, updatedGraph.Nodes);
+            // 3. Clear existing collections to remove old relationships
+            // This is the key step. It will delete all child entities that aren't re-added.
+            _context.Links.RemoveRange(existingGraph.Links);
+            _context.Nodes.RemoveRange(existingGraph.Nodes);
 
-            // 4. Update Links
-            UpdateCollection(existingGraph.Links, updatedGraph.Links);
-
-            // 5. Save changes
-            await _context.SaveChangesAsync();
-        }
-
-        // Helper method for updating collections
-        private void UpdateCollection<T>(ICollection<T> existing, ICollection<T> updated) where T : class
-        {
-            // Remove items not in updated
-            var updatedIds = updated.Select(e => (int)_context.Entry(e).Property("Id").CurrentValue).ToList();
-            var toRemove = existing.Where(e => !updatedIds.Contains((int)_context.Entry(e).Property("Id").CurrentValue)).ToList();
-            foreach (var entity in toRemove)
-                existing.Remove(entity);
-
-            // Add or update items
-            foreach (var updatedEntity in updated)
+            // 4. Re-add new collections from the updated graph
+            // The new nodes and links will be added with their correct relationships
+            foreach (var node in updatedGraph.Nodes)
             {
-                var id = (int)_context.Entry(updatedEntity).Property("Id").CurrentValue;
-                var existingEntity = existing.FirstOrDefault(e => (int)_context.Entry(e).Property("Id").CurrentValue == id);
-                if (existingEntity == null)
-                {
-                    // Attach if not tracked
-                    if (_context.Entry(updatedEntity).State == EntityState.Detached)
-                        _context.Attach(updatedEntity);
-                    existing.Add(updatedEntity);
-                }
-                else
-                {
-                    _context.Entry(existingEntity).CurrentValues.SetValues(updatedEntity);
-                }
+                existingGraph.Nodes.Add(node);
+            }
+
+            foreach (var link in updatedGraph.Links)
+            {
+                existingGraph.Links.Add(link);
+            }
+
+            // 5. Save all changes at once
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                // Handle the concurrency exception gracefully
+                // e.g., log it, re-load the entity, and retry the update
+                // You can get more details from ex.Entries
+                throw new Exception("Concurrency conflict detected. The graph was updated by another process.", ex);
             }
         }
     }
